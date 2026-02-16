@@ -1,0 +1,16 @@
+{  
+  "name": "whatsapp-bot",  
+  "version": "1.0.0",  
+  "description": "WhatsApp Auto-Reply Bot",  
+  "main": "bot.js",  
+  "scripts": {  
+    "start": "node bot.js"  
+  },  
+  "engines": {  
+    "node": ">=18.0.0"  
+  },  
+  "dependencies": {  
+    "@whiskeysockets/baileys": "^6.7.16",  
+    "qrcode-terminal": "^0.12.0"  
+  }  
+}  
