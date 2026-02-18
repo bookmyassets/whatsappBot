@@ -4,26 +4,55 @@ const {
   DisconnectReason,  
 } = require("@whiskeysockets/baileys");  
 const qrcode = require("qrcode-terminal");  
+const http = require("http");  
+const fs = require("fs");  
+const path = require("path");
+
+// ============================================  
+// RAILWAY: Keep-alive HTTP server  
+// Railway kills processes that don't bind to PORT  
+// ============================================  
+const PORT = process.env.PORT || 3000;  
+http  
+  .createServer((req, res) => {  
+    res.writeHead(200, { "Content-Type": "text/plain" });  
+    res.end("WhatsApp Bot is running! ✅");  
+  })  
+  .listen(PORT, () => {  
+    console.log(`🌐 Health server running on port ${PORT}`);  
+  });  
   
 // ============================================  
-// TRACKING (only prevent duplicate message replies)  
+// AUTH DIRECTORY (Railway persistent storage)  
+// ============================================  
+const AUTH_DIR = process.env.AUTH_DIR || "./auth_info";  
+  
+// Ensure auth directory exists  
+if (!fs.existsSync(AUTH_DIR)) {  
+  fs.mkdirSync(AUTH_DIR, { recursive: true });  
+}  
+  
+// ============================================  
+// TRACKING  
 // ============================================  
 const repliedMessages = new Set();  
-  
-// Bot start time — ignore messages received BEFORE this  
 let botStartTime = Date.now();  
   
 // ============================================  
-// KEYWORD REPLIES — Add/edit your replies here  
+// KEYWORD REPLIES  
 // ============================================  
 const keywordReplies = [  
   {  
-    // Array of keywords that trigger this reply  
     keywords: ["hi", "hello", "hey", "hii", "hiii", "helo"],  
     reply: "Hi! 👋 How can we help you today?",  
   },  
   {  
-    keywords: ["what is dholera", "dholera kya hai", "about dholera", "dholera"],  
+    keywords: [  
+      "what is dholera",  
+      "dholera kya hai",  
+      "about dholera",  
+      "dholera",  
+    ],  
     reply: `🏙️ *Dholera* is an upcoming Greenfield Smart City — a dream project of Honorable PM Narendra Modi.  
   
 It is India's first smart city being built from scratch under the DMIC (Delhi-Mumbai Industrial Corridor) project.  
@@ -68,11 +97,11 @@ Google Maps: https://maps.google.com/?q=Dholera+Smart+City`,
   },  
   {  
     keywords: ["thank", "thanks", "dhanyawad", "shukriya"],  
-    reply: "You're welcome! 😊 Feel free to ask anything anytime. We're here to help! 🙏",  
+    reply:  
+      "You're welcome! 😊 Feel free to ask anything anytime. We're here to help! 🙏",  
   },  
 ];  
   
-// Default reply when no keyword matches  
 const DEFAULT_REPLY = `Thanks for your message! 🙏  
   
 Here's what I can help you with:  
@@ -83,23 +112,15 @@ Here's what I can help you with:
   
 Or just ask your question and our team will respond shortly! 😊`;  
   
-// ============================================  
-// FIND MATCHING REPLY  
-// ============================================  
 function getReply(text) {  
   const lowerText = text.toLowerCase().trim();  
-  
-  // Check each keyword group  
   for (const entry of keywordReplies) {  
     for (const keyword of entry.keywords) {  
-      // Check if the message CONTAINS the keyword  
       if (lowerText.includes(keyword.toLowerCase())) {  
         return entry.reply;  
       }  
     }  
   }  
-  
-  // No keyword matched → send default  
   return DEFAULT_REPLY;  
 }  
   
@@ -107,12 +128,16 @@ function getReply(text) {
 // BOT START  
 // ============================================  
 async function startBot() {  
-  const { state, saveCreds } = await useMultiFileAuthState("./auth_info");  
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);  
   
   const sock = makeWASocket({  
     auth: state,  
     printQRInTerminal: true,  
     syncFullHistory: false,  
+    // Reduce logs in production  
+    logger: require("@whiskeysockets/baileys").default  
+      ? undefined  
+      : undefined,  
   });  
   
   sock.ev.on("creds.update", saveCreds);  
@@ -121,68 +146,65 @@ async function startBot() {
     const { connection, lastDisconnect, qr } = update;  
   
     if (qr) {  
+      console.log("\n📱 SCAN THIS QR CODE WITH WHATSAPP:\n");  
       qrcode.generate(qr, { small: true });  
+      console.log("\n⏳ Waiting for QR scan...\n");  
     }  
   
     if (connection === "close") {  
-      const shouldReconnect =  
-        lastDisconnect?.error?.output?.statusCode !==  
-        DisconnectReason.loggedOut;  
+      const statusCode = lastDisconnect?.error?.output?.statusCode;  
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;  
+  
+      console.log(  
+        `❌ Connection closed. Status: ${statusCode}. Reconnecting: ${shouldReconnect}`  
+      );  
+  
       if (shouldReconnect) {  
-        console.log("🔄 Reconnecting...");  
-        startBot();  
+        // Add delay before reconnecting to avoid rapid loops  
+        setTimeout(() => {  
+          startBot();  
+        }, 5000);  
+      } else {  
+        console.log("🚫 Logged out. Delete auth_info folder and restart.");  
       }  
     } else if (connection === "open") {  
       botStartTime = Date.now();  
-      console.log("✅ Bot is online and ready!");  
+      console.log("═══════════════════════════════════");  
+      console.log("✅ Bot is ONLINE and ready!");  
       console.log(`📋 Loaded ${keywordReplies.length} keyword groups`);  
+      console.log(`⏰ Started at: ${new Date().toISOString()}`);  
+      console.log("═══════════════════════════════════");  
     }  
   });  
   
-  // MAIN LISTENER  
   sock.ev.on("messages.upsert", async ({ messages, type }) => {  
-    // Only real-time messages, NOT history sync  
     if (type !== "notify") return;  
-  
     for (const msg of messages) {  
       await handleMessage(sock, msg);  
     }  
   });  
 }  
-
-// ============================================  
-// HANDLE EACH MESSAGE  
-// ============================================  
-async function handleMessage(sock, msg) {  
-  // CHECK 1: No empty messages  
-  if (!msg.message) return;  
   
-  // CHECK 2: Skip status broadcasts  
+async function handleMessage(sock, msg) {  
+  if (!msg.message) return;  
   if (msg.key.remoteJid === "status@broadcast") return;  
   
   const sender = msg.key.remoteJid;  
-  
-  // CHECK 3: Skip groups  
   if (sender.endsWith("@g.us")) return;  
-  
-  // CHECK 4: Skip bot's OWN messages (prevents infinite loop)  
   if (msg.key.fromMe) return;  
   
-  // CHECK 5: Skip old messages (before bot started)  
   const msgTime = (msg.messageTimestamp || 0) * 1000;  
   if (msgTime < botStartTime) {  
     console.log(`⏩ Skipping old message from ${sender}`);  
     return;  
   }  
   
-  // CHECK 6: Skip if already replied to THIS EXACT message  
   const messageId = msg.key.id;  
   if (repliedMessages.has(messageId)) {  
     console.log(`⏩ Duplicate message ${messageId}, skipping`);  
     return;  
   }  
   
-  // CHECK 7: Protocol/system messages — skip  
   const messageType = Object.keys(msg.message)[0];  
   if (  
     messageType === "protocolMessage" ||  
@@ -192,40 +214,38 @@ async function handleMessage(sock, msg) {
     return;  
   }  
   
-  // ---- EXTRACT TEXT ----  
   const text =  
     msg.message.conversation ||  
     msg.message.extendedTextMessage?.text ||  
     "";  
   
-  // For media messages without text  
   const displayText = text || `[${messageType}]`;  
-  
   console.log(`📩 Message from ${sender}: ${displayText}`);  
   
-  // ---- GET KEYWORD-BASED REPLY ----  
   const reply = text ? getReply(text) : DEFAULT_REPLY;  
   
-  // ---- SEND REPLY ----  
   try {  
-    // Small delay to look natural (500ms instead of 2000ms)  
     await new Promise((resolve) => setTimeout(resolve, 500));  
-  
     await sock.sendMessage(sender, { text: reply });  
-  
-    // Mark this message ID as replied  
     repliedMessages.add(messageId);  
-  
     console.log(`✅ Replied to ${sender}`);  
   } catch (error) {  
     console.error(`❌ Failed to reply to ${sender}:`, error.message);  
   }  
   
-  // ---- MEMORY CLEANUP ----  
   if (repliedMessages.size > 10000) {  
     const idsArray = [...repliedMessages];  
     idsArray.slice(0, 5000).forEach((id) => repliedMessages.delete(id));  
   }  
 }  
   
-startBot();  
+// Handle process crashes gracefully  
+process.on("uncaughtException", (err) => {  
+  console.error("Uncaught Exception:", err);  
+});  
+  
+process.on("unhandledRejection", (err) => {  
+  console.error("Unhandled Rejection:", err);  
+});  
+  
+startBot();
