@@ -102,7 +102,7 @@ function getReply(text) {
   // No keyword matched → send default  
   return DEFAULT_REPLY;  
 }  
-  
+
 // ============================================  
 // BOT START  
 // ============================================  
@@ -111,7 +111,6 @@ async function startBot() {
   
   const sock = makeWASocket({  
     auth: state,  
-    printQRInTerminal: true,  
     syncFullHistory: false,  
   });  
   
