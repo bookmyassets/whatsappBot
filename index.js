@@ -7,6 +7,7 @@ const qrcode = require("qrcode-terminal");
 const http = require("http");  
 const fs = require("fs");  
 const path = require("path");
+ const { pino } = require("pino");
 
 // ============================================  
 // RAILWAY: Keep-alive HTTP server  
@@ -130,15 +131,13 @@ function getReply(text) {
 async function startBot() {  
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);  
   
-  const sock = makeWASocket({  
-    auth: state,  
-    printQRInTerminal: true,  
-    syncFullHistory: false,  
-    // Reduce logs in production  
-    logger: require("@whiskeysockets/baileys").default  
-      ? undefined  
-      : undefined,  
-  });  
+
+const sock = makeWASocket({
+    auth: state,
+    printQRInTerminal: false,
+    syncFullHistory: false,
+    logger: pino({ level: "silent" }),
+  }); 
   
   sock.ev.on("creds.update", saveCreds);  
   
